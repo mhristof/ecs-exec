@@ -4,6 +4,9 @@ import (
 	// aws sdk v2
 	"context"
 	"flag"
+	"fmt"
+	"os"
+	"os/exec"
 	"runtime/debug"
 	"strings"
 	"sync"
@@ -14,6 +17,8 @@ import (
 	"github.com/rs/zerolog"
 	"github.com/rs/zerolog/log"
 )
+
+var ExecMutex = &sync.Mutex{}
 
 var Commit = func() string {
 	info, ok := debug.ReadBuildInfo()
@@ -30,8 +35,6 @@ var Commit = func() string {
 }()
 
 func main() {
-	// accept --name argument with the service name
-
 	zerolog.SetGlobalLevel(zerolog.InfoLevel)
 	serviceName := ""
 	verbose := false
@@ -115,18 +118,22 @@ func printTaskCmd(ecsClient *ecs.Client, cluster, service, task string) {
 			continue
 		}
 
-		// if taskDetail.HealthStatus != types.HealthStatusHealthy {
-		// 	log.Debug().Str("service", thisService).Str("task", task).Msg("Skipping due to task health status")
-		// 	continue
-		// }
-
 		for _, container := range taskDetail.Containers {
-			// if container.HealthStatus != types.HealthStatusHealthy {
-			// 	log.Debug().Str("service", thisService).Str("task", task).Str("container", *container.Name).Msg("Skipping due to container health status")
-			// 	continue
-			// }
+			log.Info().Str("service", thisService).Str("task", task).Msg("Connecting to container")
+			log.Debug().Str("cluster", cluster).Str("service", thisService).Str("task", task).Interface("container", container).Msg("Container details")
 
-			println("aws ecs execute-command --cluster", cluster, "--task", task, "--container", *container.Name, "--command /bin/sh --interactive")
+			ExecMutex.Lock()
+			cmdStr := fmt.Sprintf(
+				"aws ecs execute-command --cluster %s --task %s --container %s --command /bin/sh --interactive",
+				cluster, task, *container.Name,
+			)
+
+			cmd := exec.Command("bash", "-c", cmdStr)
+			cmd.Stdin = os.Stdin
+			cmd.Stdout = os.Stdout
+			cmd.Stderr = os.Stderr
+			_ = cmd.Run() // add error checking
+			ExecMutex.Unlock()
 		}
 	}
 }
