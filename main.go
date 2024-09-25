@@ -3,6 +3,7 @@ package main
 import (
 	// aws sdk v2
 	"context"
+	"encoding/json"
 	"flag"
 	"fmt"
 	"os"
@@ -11,6 +12,7 @@ import (
 	"strings"
 	"sync"
 
+	"github.com/adrg/xdg"
 	"github.com/aws/aws-sdk-go-v2/aws"
 	"github.com/aws/aws-sdk-go-v2/config"
 	"github.com/aws/aws-sdk-go-v2/service/ecs"
@@ -33,6 +35,108 @@ var Commit = func() string {
 	}
 	return "unknown"
 }()
+
+var Cachepath = xdg.CacheHome + "/ecs-exec.json"
+
+func cacheAdd(key string, value string) {
+	cache := map[string]string{}
+	// if the file exists, load it add the value and write it back
+	// if the file does not exist, create it and add the value
+
+	// check if file exists
+	_, err := os.Stat(Cachepath)
+	if err != nil {
+		// file does not exist, create it
+		_, err = os.Create(Cachepath)
+		if err != nil {
+			log.Error().Err(err).Msg("Failed to create cache file")
+			return
+		}
+	}
+
+	// read the file
+	file, err := os.OpenFile(Cachepath, os.O_RDWR, 0o644)
+	if err != nil {
+		log.Error().Err(err).Msg("Failed to open cache file")
+		return
+	}
+
+	// decode the file
+	decoder := json.NewDecoder(file)
+	err = decoder.Decode(&cache)
+	if err != nil {
+		log.Error().Err(err).Msg("Failed to decode cache file")
+	}
+
+	// add the value
+	cache[key] = value
+
+	// write the file
+	file, err = os.OpenFile(Cachepath, os.O_RDWR, 0o644)
+	if err != nil {
+		log.Error().Err(err).Msg("Failed to open cache file")
+		return
+	}
+
+	// close the file
+	defer file.Close()
+
+	// encode the file
+	encoder := json.NewEncoder(file)
+	err = encoder.Encode(cache)
+	if err != nil {
+		log.Error().Err(err).Msg("Failed to encode cache file")
+	}
+
+	// write the file
+	err = file.Sync()
+	if err != nil {
+		log.Error().Err(err).Msg("Failed to sync cache file")
+	}
+
+	log.Debug().Str("key", key).Str("value", value).Str("cache", Cachepath).Msg("Added to cache")
+}
+
+func cacheGet(key string) string {
+	cache := map[string]string{}
+	// if the file exists, load it add the value and write it back
+	// if the file does not exist, create it and add the value
+
+	// check if file exists
+	_, err := os.Stat(Cachepath)
+	if err != nil {
+		// file does not exist, create it
+		_, err = os.Create(Cachepath)
+		if err != nil {
+			log.Error().Err(err).Msg("Failed to create cache file")
+			return ""
+		}
+	}
+
+	// read the file
+	file, err := os.OpenFile(Cachepath, os.O_RDWR, 0o644)
+	if err != nil {
+		log.Error().Err(err).Msg("Failed to open cache file")
+		return ""
+	}
+
+	// decode the file
+	decoder := json.NewDecoder(file)
+	err = decoder.Decode(&cache)
+	if err != nil {
+		log.Error().Err(err).Msg("Failed to decode cache file")
+	}
+
+	// get the value
+	value, ok := cache[key]
+	if !ok {
+		log.Debug().Str("key", key).Str("cache", Cachepath).Msg("Key not found in cache")
+		return ""
+	}
+
+	log.Debug().Str("key", key).Str("value", value).Str("cache", Cachepath).Msg("Got from cache")
+	return value
+}
 
 func main() {
 	zerolog.SetGlobalLevel(zerolog.InfoLevel)
@@ -120,12 +224,26 @@ func printTaskCmd(ecsClient *ecs.Client, cluster, service, task string) {
 
 		for _, container := range taskDetail.Containers {
 			log.Info().Str("service", thisService).Str("task", task).Msg("Connecting to container")
-			log.Debug().Str("cluster", cluster).Str("service", thisService).Str("task", task).Interface("container", container).Msg("Container details")
+			log.Debug().Str("image", *container.Image).Str("cluster", cluster).Str("service", thisService).Str("task", task).Interface("container", container).Msg("Container details")
+
+			shell := cacheGet(*container.Image)
+			if shell == "" {
+				shell := "/bin/bash"
+				stdout, _, err := awsECSExec(cluster, task, *container.Name, "/bin/bash --version")
+				if err != nil {
+				}
+
+				if strings.Contains(stdout, "not found") {
+					shell = "/bin/sh"
+				}
+
+				cacheAdd(*container.Image, shell)
+			}
 
 			ExecMutex.Lock()
 			cmdStr := fmt.Sprintf(
-				"aws ecs execute-command --cluster %s --task %s --container %s --command /bin/sh --interactive",
-				cluster, task, *container.Name,
+				"aws ecs execute-command --cluster %s --task %s --container %s --command %s --interactive",
+				cluster, task, *container.Name, shell,
 			)
 
 			cmd := exec.Command("bash", "-c", cmdStr)
@@ -136,4 +254,27 @@ func printTaskCmd(ecsClient *ecs.Client, cluster, service, task string) {
 			ExecMutex.Unlock()
 		}
 	}
+}
+
+func awsECSExec(cluster, task, container, command string) (string, string, error) {
+	cmdStr := fmt.Sprintf(
+		"aws ecs execute-command --cluster %s --task %s --container %s --command '%s' --interactive",
+		cluster, task, container, command,
+	)
+
+	log.Debug().Str("cmd", cmdStr).Msg("Executing command")
+
+	cmd := exec.Command("bash", "-c", cmdStr)
+	stdout := &strings.Builder{}
+	stderr := &strings.Builder{}
+	cmd.Stdout = stdout
+	cmd.Stderr = stderr
+
+	err := cmd.Run()
+	if err != nil {
+		log.Error().Err(err).Str("stdout", stdout.String()).Str("stderr", stderr.String()).Msg("Failed to execute command")
+		return "", "", err
+	}
+
+	return stdout.String(), stderr.String(), nil
 }
