@@ -11,7 +11,6 @@ import (
 	"github.com/aws/aws-sdk-go-v2/aws"
 	"github.com/aws/aws-sdk-go-v2/config"
 	"github.com/aws/aws-sdk-go-v2/service/ecs"
-	"github.com/aws/aws-sdk-go-v2/service/ecs/types"
 	"github.com/rs/zerolog"
 	"github.com/rs/zerolog/log"
 )
@@ -116,16 +115,16 @@ func printTaskCmd(ecsClient *ecs.Client, cluster, service, task string) {
 			continue
 		}
 
-		if taskDetail.HealthStatus != types.HealthStatusHealthy {
-			log.Debug().Str("service", thisService).Str("task", task).Msg("Skipping due to task health status")
-			continue
-		}
+		// if taskDetail.HealthStatus != types.HealthStatusHealthy {
+		// 	log.Debug().Str("service", thisService).Str("task", task).Msg("Skipping due to task health status")
+		// 	continue
+		// }
 
 		for _, container := range taskDetail.Containers {
-			if container.HealthStatus != types.HealthStatusHealthy {
-				log.Debug().Str("service", thisService).Str("task", task).Str("container", *container.Name).Msg("Skipping due to container health status")
-				continue
-			}
+			// if container.HealthStatus != types.HealthStatusHealthy {
+			// 	log.Debug().Str("service", thisService).Str("task", task).Str("container", *container.Name).Msg("Skipping due to container health status")
+			// 	continue
+			// }
 
 			println("aws ecs execute-command --cluster", cluster, "--task", task, "--container", *container.Name, "--command /bin/sh --interactive")
 		}
