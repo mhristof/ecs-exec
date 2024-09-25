@@ -17,14 +17,17 @@ import (
 )
 
 var Commit = func() string {
-	if info, ok := debug.ReadBuildInfo(); ok {
-		for _, setting := range info.Settings {
-			if setting.Key == "vcs.revision" {
-				return setting.Value
-			}
+	info, ok := debug.ReadBuildInfo()
+	if !ok {
+		panic("Could not read build info")
+	}
+
+	for _, setting := range info.Settings {
+		if setting.Key == "vcs.revision" {
+			return setting.Value
 		}
 	}
-	return ""
+	return "unknown"
 }()
 
 func main() {
@@ -37,6 +40,7 @@ func main() {
 	flag.StringVar(&serviceName, "name", serviceName, "Service name")
 	flag.StringVar(&serviceName, "n", serviceName, "Service name")
 	flag.BoolVar(&verbose, "v", verbose, "Verbose mode")
+
 	flag.Parse()
 
 	if verbose {
