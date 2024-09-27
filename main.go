@@ -11,6 +11,7 @@ import (
 	"runtime/debug"
 	"strings"
 	"sync"
+	"time"
 
 	"github.com/adrg/xdg"
 	"github.com/aws/aws-sdk-go-v2/aws"
@@ -142,12 +143,24 @@ func main() {
 	zerolog.SetGlobalLevel(zerolog.InfoLevel)
 	serviceName := ""
 	verbose := false
+	outputFormat := ""
 
 	flag.StringVar(&serviceName, "name", serviceName, "Service name")
 	flag.StringVar(&serviceName, "n", serviceName, "Service name")
 	flag.BoolVar(&verbose, "v", verbose, "Verbose mode")
+	// default value is text
+	flag.StringVar(&outputFormat, "output", "text", "Output format")
 
 	flag.Parse()
+
+	switch outputFormat {
+	case "text":
+		log.Logger = log.Output(zerolog.ConsoleWriter{Out: os.Stdout, TimeFormat: time.RFC3339})
+	case "json":
+		// no need to do anything
+	default:
+		log.Fatal().Str("output", outputFormat).Msg("Invalid output format")
+	}
 
 	if verbose {
 		zerolog.SetGlobalLevel(zerolog.DebugLevel)
@@ -222,9 +235,27 @@ func printTaskCmd(ecsClient *ecs.Client, cluster, service, task string) {
 			continue
 		}
 
+		if service == "" {
+			log.Info().Str("service", thisService).Str("task", task).Msg("Found task")
+			continue
+		}
+
 		for _, container := range taskDetail.Containers {
-			log.Info().Str("service", thisService).Str("task", task).Msg("Connecting to container")
-			log.Debug().Str("image", *container.Image).Str("cluster", cluster).Str("service", thisService).Str("task", task).Interface("container", container).Msg("Container details")
+			ExecMutex.Lock()
+
+			// get the uptime from taskDetail.CreatedAt - now
+			uptime := time.Since(*taskDetail.CreatedAt)
+
+			log.Info().Str("service", thisService).
+				Str("task", task).
+				Str("uptime", fmt.Sprintf("%s", uptime)).
+				Msg("Connecting to container")
+			log.Debug().Str("image", *container.Image).
+				Str("cluster", cluster).
+				Str("service", thisService).
+				Str("task", task).
+				Interface("container", container).
+				Msg("Container details")
 
 			shell := cacheGet(*container.Image)
 			if shell == "" {
@@ -240,7 +271,6 @@ func printTaskCmd(ecsClient *ecs.Client, cluster, service, task string) {
 				cacheAdd(*container.Image, shell)
 			}
 
-			ExecMutex.Lock()
 			cmdStr := fmt.Sprintf(
 				"aws ecs execute-command --cluster %s --task %s --container %s --command %s --interactive",
 				cluster, task, *container.Name, shell,
@@ -252,6 +282,7 @@ func printTaskCmd(ecsClient *ecs.Client, cluster, service, task string) {
 			cmd.Stderr = os.Stderr
 			_ = cmd.Run() // add error checking
 			ExecMutex.Unlock()
+			os.Exit(0)
 		}
 	}
 }
