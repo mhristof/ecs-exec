@@ -241,6 +241,10 @@ func printTaskCmd(ecsClient *ecs.Client, cluster, service, task string) {
 		}
 
 		for _, container := range taskDetail.Containers {
+			if service != "" && *container.Name != service {
+				log.Debug().Str("service", thisService).Str("task", task).Msg("Skipping due to container name name mismatch")
+				continue
+			}
 			ExecMutex.Lock()
 
 			// get the uptime from taskDetail.CreatedAt - now
@@ -248,6 +252,7 @@ func printTaskCmd(ecsClient *ecs.Client, cluster, service, task string) {
 
 			log.Info().Str("service", thisService).
 				Str("task", task).
+				Str("container", *container.Name).
 				Str("uptime", fmt.Sprintf("%s", uptime)).
 				Msg("Connecting to container")
 			log.Debug().Str("image", *container.Image).
@@ -259,16 +264,21 @@ func printTaskCmd(ecsClient *ecs.Client, cluster, service, task string) {
 
 			shell := cacheGet(*container.Image)
 			if shell == "" {
-				shell := "/bin/bash"
+				shell = "/bin/bash"
 				stdout, _, err := awsECSExec(cluster, task, *container.Name, "/bin/bash --version")
-				if err != nil {
-				}
+				log.Debug().Str("stdout", stdout).Str("stderr", "").Err(err).Msg("Checking for bash")
 
-				if strings.Contains(stdout, "not found") {
+				if strings.Contains(stdout, "not found") || strings.Contains(stdout, "no such file or directory") {
 					shell = "/bin/sh"
 				}
 
 				cacheAdd(*container.Image, shell)
+			}
+
+			if shell == "" {
+				log.Error().Str("image", *container.Image).Msg("Failed to get shell")
+				ExecMutex.Unlock()
+				continue
 			}
 
 			cmdStr := fmt.Sprintf(
@@ -276,6 +286,7 @@ func printTaskCmd(ecsClient *ecs.Client, cluster, service, task string) {
 				cluster, task, *container.Name, shell,
 			)
 
+			log.Debug().Str("cmd", cmdStr).Msg("Executing command")
 			cmd := exec.Command("bash", "-c", cmdStr)
 			cmd.Stdin = os.Stdin
 			cmd.Stdout = os.Stdout
